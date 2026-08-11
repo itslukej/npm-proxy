@@ -16,6 +16,8 @@ export interface Config {
   maxMetadataBytes: number;
   /** Max bytes held by the in-memory metadata cache. */
   metadataCacheMaxBytes: number;
+  /** True when PUBLIC_REGISTRY_URL was not set and fell back to localhost. */
+  publicUrlIsDefault: boolean;
   upstreamTimeoutMs: number;
   logLevel: string;
   /** Package names that bypass the age policy entirely. */
@@ -93,6 +95,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (port > 65535) throw new ConfigError(`PORT must be <= 65535, got ${port}`);
 
   const upstreamRegistry = urlVar(env, 'UPSTREAM_REGISTRY', 'https://registry.npmjs.org');
+  const publicUrlIsDefault = !env.PUBLIC_REGISTRY_URL?.trim();
   const publicRegistryUrl = urlVar(env, 'PUBLIC_REGISTRY_URL', `http://localhost:${port}`);
 
   // MIN_PACKAGE_AGE_HOURS wins over MIN_PACKAGE_AGE_DAYS when both are set.
@@ -123,10 +126,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     publicRegistryUrl,
     minAgeMs,
     minAgeHours,
+    publicUrlIsDefault,
     metadataCacheTtlMs: intVar(env, 'METADATA_CACHE_TTL_SECONDS', 300) * 1000,
     negativeCacheTtlMs: intVar(env, 'NEGATIVE_CACHE_TTL_SECONDS', 60) * 1000,
     maxMetadataBytes: intVar(env, 'MAX_METADATA_BYTES', 64 * 1024 * 1024, 1024),
-    metadataCacheMaxBytes: intVar(env, 'METADATA_CACHE_MAX_BYTES', 256 * 1024 * 1024, 0),
+    // min 1024: a 0 here would silently disable eviction (unbounded memory),
+    // not disable caching. To effectively disable caching, set a small cap —
+    // entries that don't fit are simply never stored.
+    metadataCacheMaxBytes: intVar(env, 'METADATA_CACHE_MAX_BYTES', 256 * 1024 * 1024, 1024),
     upstreamTimeoutMs: intVar(env, 'UPSTREAM_TIMEOUT_MS', 10_000, 100),
     logLevel,
     excludePackages: new Set(listVar(env, 'MIN_AGE_EXCLUDE_PACKAGES')),

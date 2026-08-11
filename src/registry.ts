@@ -68,7 +68,7 @@ export class UpstreamClient {
    * the abbreviated packument has no `time` map). Enforces the configured
    * size cap on DECOMPRESSED bytes.
    */
-  async fetchJson(path: string): Promise<{ statusCode: number; json?: unknown }> {
+  async fetchJson(path: string): Promise<{ statusCode: number; json?: unknown; bytes?: number }> {
     const res = await this.open('GET', path, {
       accept: 'application/json',
       'accept-encoding': 'gzip',
@@ -102,13 +102,14 @@ export class UpstreamClient {
         chunks.push(chunk);
       }
     } catch (err) {
+      res.body.destroy(); // free the pooled connection on gunzip/read failures too
       if (err instanceof UpstreamError) throw err;
       if (isTimeout(err)) throw new UpstreamError('timeout', 'upstream body timed out');
       throw new UpstreamError('network', `upstream body failed: ${(err as Error).message}`);
     }
 
     try {
-      return { statusCode: 200, json: JSON.parse(Buffer.concat(chunks).toString('utf8')) };
+      return { statusCode: 200, json: JSON.parse(Buffer.concat(chunks).toString('utf8')), bytes: total };
     } catch {
       throw new UpstreamError('bad-json', 'upstream returned malformed JSON');
     }

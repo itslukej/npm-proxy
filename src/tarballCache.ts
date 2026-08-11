@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, rename, stat, unlink } from 'node:fs/promises';
+import { mkdir, readdir, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { finished, type Readable } from 'node:stream';
 
@@ -14,6 +14,14 @@ export class TarballDiskCache {
 
   async init(): Promise<void> {
     await mkdir(this.dir, { recursive: true });
+    // Sweep temp files orphaned by unclean shutdowns (SIGKILL mid-tee); the
+    // cache directory is persistent (e.g. a Docker volume), so without this
+    // they accumulate forever. Old PIDs are by construction not in use.
+    for (const entry of await readdir(this.dir)) {
+      if (entry.endsWith('.tmp')) {
+        await unlink(path.join(this.dir, entry)).catch(() => {});
+      }
+    }
   }
 
   private filePath(name: string, filename: string): string {

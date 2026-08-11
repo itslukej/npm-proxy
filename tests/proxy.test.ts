@@ -139,6 +139,40 @@ describe('package metadata', () => {
     expect(upstream.requestCount('/cached')).toBe(1);
   });
 
+  it('drops a malformed (null) version manifest instead of returning a 500', async () => {
+    const doc = makePackument('mixed', { '1.0.0': daysAgo(100) });
+    (doc.versions as Record<string, unknown>)['2.0.0'] = null;
+    (doc.time as Record<string, string>)['2.0.0'] = daysAgo(100);
+    servePackument('mixed', doc);
+    app = await buildTestApp(upstream.url);
+
+    const res = await app.inject({ method: 'GET', url: '/mixed' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().versions).toHaveProperty('1.0.0');
+    expect(res.json().versions).not.toHaveProperty('2.0.0');
+  });
+
+  it('lets versions age past the threshold without waiting for cache TTL expiry', async () => {
+    let now = Date.now();
+    servePackument('aging', makePackument('aging', { '1.0.0': daysAgo(6) }));
+    app = await buildTestApp(
+      upstream.url,
+      { METADATA_CACHE_TTL_SECONDS: '1000000' }, // raw cache far outlives the clock jump
+      { now: () => now },
+    );
+
+    // 6 days old with a 7-day minimum: the only version is blocked.
+    expect((await app.inject({ method: 'GET', url: '/aging' })).statusCode).toBe(404);
+
+    now += 2 * 86_400_000; // two days later, still inside the raw cache TTL
+    const after = await app.inject({ method: 'GET', url: '/aging' });
+    expect(after.statusCode).toBe(200);
+    expect(after.json().versions).toHaveProperty('1.0.0');
+    // Proves aging-in came from re-filtering the cached raw packument,
+    // not from a refetch.
+    expect(upstream.requestCount('/aging')).toBe(1);
+  });
+
   it('propagates upstream 404 as npm-style not found', async () => {
     app = await buildTestApp(upstream.url);
     const res = await app.inject({ method: 'GET', url: '/does-not-exist' });

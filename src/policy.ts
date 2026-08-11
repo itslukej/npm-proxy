@@ -25,21 +25,26 @@ export type Decision =
   | { allowed: true; reason: 'old-enough'; publishedAt: string; ageMs: number }
   | { allowed: true; reason: 'excluded-package' | 'excluded-version' }
   | { allowed: false; reason: 'too-young'; publishedAt: string; ageMs: number }
-  | { allowed: false; reason: 'unknown-publish-time' };
+  | { allowed: false; reason: 'unknown-publish-time' }
+  | { allowed: false; reason: 'unknown-version' };
 
 /**
  * Decide whether a single version passes the age policy.
  *
  * Fails closed: a version is allowed only if it is explicitly excluded from
- * the policy, or its publication timestamp is present, parseable, and older
- * than the cutoff. The `time` map is only ever consulted by version key —
- * its special entries ("created", "modified", "unpublished") are never
- * treated as versions.
+ * the policy, or it exists in the packument's `versions` map AND its
+ * publication timestamp is present, parseable, and older than the cutoff.
+ * `versionExists` is what keeps the `time` map's special entries ("created",
+ * "modified", "unpublished") from ever being treated as versions — a version
+ * key that isn't in `versions` is `unknown-version`, never checked against
+ * `time`. Exclusions are checked first so an excluded version absent from a
+ * (possibly stale) packument can still be fetched upstream.
  */
 export function decideVersion(
   name: string,
   version: string,
   time: Record<string, string> | undefined,
+  versionExists: boolean,
   policy: PolicyConfig,
   now: number,
 ): Decision {
@@ -48,6 +53,9 @@ export function decideVersion(
   }
   if (policy.excludeVersions.has(`${name}@${version}`)) {
     return { allowed: true, reason: 'excluded-version' };
+  }
+  if (!versionExists) {
+    return { allowed: false, reason: 'unknown-version' };
   }
   const raw = time?.[version];
   if (typeof raw !== 'string') {
@@ -118,7 +126,13 @@ export function filterPackument(
   let blockedCount = 0;
 
   for (const [version, manifest] of Object.entries(versions)) {
-    const decision = decideVersion(name, version, time, policy, now);
+    // Upstream is untrusted: a malformed (non-object) manifest entry is
+    // blocked rather than crashing metadata for the whole package.
+    if (manifest === null || typeof manifest !== 'object') {
+      blockedCount += 1;
+      continue;
+    }
+    const decision = decideVersion(name, version, time, true, policy, now);
     if (!decision.allowed) {
       blockedCount += 1;
       continue;

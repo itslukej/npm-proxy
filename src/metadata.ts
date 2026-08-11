@@ -48,7 +48,7 @@ export class MetadataService {
   }
 
   private async fetchAndCache(name: string): Promise<PackumentResult> {
-    let result: { statusCode: number; json?: unknown };
+    let result: { statusCode: number; json?: unknown; bytes?: number };
     try {
       result = await this.upstream.fetchJson('/' + encodedNamePath(name));
     } catch (err) {
@@ -72,9 +72,10 @@ export class MetadataService {
     }
 
     const value: CacheValue = { kind: 'ok', doc: doc as Packument };
-    // Rough size estimate for the byte-capped LRU; ~2 bytes/char is close
-    // enough without re-serializing the document.
-    const sizeBytes = JSON.stringify(doc).length;
+    // Charge the LRU the exact decompressed byte count times 2: the retained
+    // parsed object graph occupies well over the serialized size in V8, so
+    // the raw count alone would let real heap exceed the configured cap.
+    const sizeBytes = (result.bytes ?? 1024) * 2;
     await this.cache.set(name, value, this.config.metadataCacheTtlMs, sizeBytes);
     return value;
   }

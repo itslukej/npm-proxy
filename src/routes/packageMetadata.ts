@@ -2,9 +2,16 @@ import { createHash } from 'node:crypto';
 
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
-import type { AppContext } from '../context.js';
+import type { AppContext, FilteredMetadata } from '../context.js';
 import { sendUpstreamError } from '../httpErrors.js';
 import { filterPackument } from '../policy.js';
+
+/**
+ * How long a serialized filtered response may be reused. Bounded at 60s so
+ * versions still age past the threshold promptly (matching the max-age we
+ * hand to clients); never longer than the raw-packument TTL.
+ */
+const FILTERED_TTL_CAP_MS = 60_000;
 
 /**
  * GET/HEAD /{name} — serve the upstream packument with too-young versions
@@ -23,6 +30,11 @@ export async function handleMetadata(
 ): Promise<FastifyReply> {
   ctx.metrics.inc('metadata_requests_total');
   req.log.info({ package: name }, 'package metadata requested');
+
+  const cached = await ctx.filteredCache.get(name);
+  if (cached) {
+    return serveFiltered(req, reply, cached);
+  }
 
   let result;
   try {
@@ -62,19 +74,29 @@ export async function handleMetadata(
 
   const body = JSON.stringify(filtered.doc);
   const etag = `"${createHash('sha1').update(body).digest('hex')}"`;
+  const entry: FilteredMetadata = { body, etag };
+  await ctx.filteredCache.set(
+    name,
+    entry,
+    Math.min(FILTERED_TTL_CAP_MS, ctx.config.metadataCacheTtlMs),
+    body.length * 2,
+  );
+  return serveFiltered(req, reply, entry);
+}
 
-  reply.header('etag', etag);
+function serveFiltered(req: FastifyRequest, reply: FastifyReply, entry: FilteredMetadata): FastifyReply {
+  reply.header('etag', entry.etag);
   reply.header('cache-control', 'public, max-age=60');
   reply.header('content-type', 'application/json');
 
-  if (etagMatches(req.headers['if-none-match'], etag)) {
+  if (etagMatches(req.headers['if-none-match'], entry.etag)) {
     return reply.code(304).send();
   }
-  reply.header('content-length', Buffer.byteLength(body));
+  reply.header('content-length', Buffer.byteLength(entry.body));
   if (req.method === 'HEAD') {
     return reply.code(200).send();
   }
-  return reply.code(200).send(body);
+  return reply.code(200).send(entry.body);
 }
 
 function etagMatches(header: string | string[] | undefined, etag: string): boolean {

@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { loadConfig } from '../../src/config.js';
 import type { Packument } from '../../src/policy.js';
-import { buildServer } from '../../src/server.js';
+import { buildServer, type BuildOptions } from '../../src/server.js';
 
 export const PUBLIC_URL = 'https://npm-proxy.example.com';
 
@@ -47,6 +47,7 @@ export function makePackument(
 export async function buildTestApp(
   upstreamUrl: string,
   env: Record<string, string> = {},
+  opts: BuildOptions = {},
 ): Promise<FastifyInstance> {
   const config = loadConfig({
     UPSTREAM_REGISTRY: upstreamUrl,
@@ -54,5 +55,5 @@ export async function buildTestApp(
     UPSTREAM_TIMEOUT_MS: '500',
     ...env,
   });
-  return buildServer(config, { loggerEnabled: false });
+  return buildServer(config, { loggerEnabled: false, ...opts });
 }

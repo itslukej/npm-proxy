@@ -114,6 +114,53 @@ describe('tarball downloads', () => {
     expect((await app.inject({ method: 'GET', url: '/ghost/-/ghost-1.0.0.tgz' })).statusCode).toBe(404);
   });
 
+  it('404s unpublished versions (present in time, absent from versions) without touching upstream tarballs', async () => {
+    const doc = makePackument('foo', { '1.0.0': daysAgo(100) });
+    (doc.time as Record<string, string>)['2.0.0'] = daysAgo(50); // unpublished leftover
+    upstream.route('/foo', { body: JSON.stringify(doc) });
+    app = await buildTestApp(upstream.url);
+
+    const res = await app.inject({ method: 'GET', url: '/foo/-/foo-2.0.0.tgz' });
+    expect(res.statusCode).toBe(404);
+    expect(upstream.requestCount('/foo/-/')).toBe(0);
+  });
+
+  it('404s (not 403s) version keys matching time-map special entries', async () => {
+    serveTarballPackage('foo', { '1.0.0': daysAgo(100) });
+    app = await buildTestApp(upstream.url);
+
+    // time.modified is always recent; a naive lookup would 403 "0.0 days old".
+    expect((await app.inject({ method: 'GET', url: '/foo/-/foo-modified.tgz' })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'GET', url: '/foo/-/foo-created.tgz' })).statusCode).toBe(404);
+  });
+
+  it('answers HEAD for an allowed tarball without a body', async () => {
+    serveTarballPackage('foo', { '1.0.0': daysAgo(100) });
+    app = await buildTestApp(upstream.url);
+
+    const res = await app.inject({ method: 'HEAD', url: '/foo/-/foo-1.0.0.tgz' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('');
+  });
+
+  it('blocks HEAD for a young tarball with 403', async () => {
+    serveTarballPackage('foo', { '1.2.3': daysAgo(2) });
+    app = await buildTestApp(upstream.url);
+
+    const res = await app.inject({ method: 'HEAD', url: '/foo/-/foo-1.2.3.tgz' });
+    expect(res.statusCode).toBe(403);
+    expect(upstream.requestCount('/foo/-/')).toBe(0);
+  });
+
+  it('maps upstream failures on HEAD to 502, never 404', async () => {
+    serveTarballPackage('foo', { '1.0.0': daysAgo(100) });
+    upstream.route('HEAD /foo/-/foo-1.0.0.tgz', { status: 500, body: '' });
+    app = await buildTestApp(upstream.url);
+
+    const res = await app.inject({ method: 'HEAD', url: '/foo/-/foo-1.0.0.tgz' });
+    expect(res.statusCode).toBe(502);
+  });
+
   it('caches allowed tarballs on disk and serves repeats from the cache', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'npm-proxy-test-'));
     serveTarballPackage('foo', { '1.0.0': daysAgo(100) });

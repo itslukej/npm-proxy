@@ -24,51 +24,63 @@ function policy(overrides: Partial<PolicyConfig> = {}): PolicyConfig {
 
 describe('decideVersion', () => {
   it('allows versions older than the minimum age', () => {
-    const d = decideVersion('foo', '1.0.0', { '1.0.0': daysAgo(30) }, policy(), NOW);
+    const d = decideVersion('foo', '1.0.0', { '1.0.0': daysAgo(30) }, true, policy(), NOW);
     expect(d.allowed).toBe(true);
     expect(d.reason).toBe('old-enough');
   });
 
   it('blocks versions younger than the minimum age', () => {
-    const d = decideVersion('foo', '1.0.0', { '1.0.0': daysAgo(2) }, policy(), NOW);
+    const d = decideVersion('foo', '1.0.0', { '1.0.0': daysAgo(2) }, true, policy(), NOW);
     expect(d).toMatchObject({ allowed: false, reason: 'too-young' });
   });
 
+  it('allows a version exactly at the age boundary and blocks one 1ms inside it', () => {
+    const fixedNow = Date.parse('2026-08-11T00:00:00.000Z');
+    const p = policy();
+    const exact = new Date(fixedNow - p.minAgeMs).toISOString();
+    const justUnder = new Date(fixedNow - p.minAgeMs + 1).toISOString();
+    expect(decideVersion('foo', '1.0.0', { '1.0.0': exact }, true, p, fixedNow).allowed).toBe(true);
+    expect(decideVersion('foo', '1.0.1', { '1.0.1': justUnder }, true, p, fixedNow)).toMatchObject({
+      allowed: false,
+      reason: 'too-young',
+    });
+  });
+
   it('fails closed when the version has no time entry', () => {
-    const d = decideVersion('foo', '1.0.0', {}, policy(), NOW);
+    const d = decideVersion('foo', '1.0.0', {}, true, policy(), NOW);
     expect(d).toMatchObject({ allowed: false, reason: 'unknown-publish-time' });
   });
 
   it('fails closed when the time map is missing entirely', () => {
-    expect(decideVersion('foo', '1.0.0', undefined, policy(), NOW).allowed).toBe(false);
+    expect(decideVersion('foo', '1.0.0', undefined, true, policy(), NOW).allowed).toBe(false);
   });
 
   it('fails closed on an unparseable timestamp', () => {
-    const d = decideVersion('foo', '1.0.0', { '1.0.0': 'not-a-date' }, policy(), NOW);
+    const d = decideVersion('foo', '1.0.0', { '1.0.0': 'not-a-date' }, true, policy(), NOW);
     expect(d).toMatchObject({ allowed: false, reason: 'unknown-publish-time' });
   });
 
   it('never treats time special keys as versions', () => {
-    const d = decideVersion('foo', 'created', { created: daysAgo(3000) }, policy(), NOW);
-    // "created" is looked up as a version string; it happens to exist here,
-    // but real packuments never have a version literally named "created" in
-    // `versions` — this just documents that lookup is by version key only.
-    expect(d.allowed).toBe(true);
+    // A version key that is absent from `versions` (like the time map's
+    // created/modified entries) is unknown-version — the special timestamp
+    // is never consulted, no matter how old it is.
+    const d = decideVersion('foo', 'created', { created: daysAgo(3000) }, false, policy(), NOW);
+    expect(d).toMatchObject({ allowed: false, reason: 'unknown-version' });
   });
 
   it('allows an excluded package regardless of age', () => {
     const p = policy({ excludePackages: new Set(['@my-company/foo']) });
-    const d = decideVersion('@my-company/foo', '1.0.0', { '1.0.0': daysAgo(0.1) }, p, NOW);
+    const d = decideVersion('@my-company/foo', '1.0.0', { '1.0.0': daysAgo(0.1) }, true, p, NOW);
     expect(d).toMatchObject({ allowed: true, reason: 'excluded-package' });
   });
 
-  it('allows an excluded exact version regardless of age (and even without a timestamp)', () => {
+  it('allows an excluded exact version regardless of age (even if absent from the packument)', () => {
     const p = policy({ excludeVersions: new Set(['@scope/bar@4.5.6']) });
-    expect(decideVersion('@scope/bar', '4.5.6', {}, p, NOW)).toMatchObject({
+    expect(decideVersion('@scope/bar', '4.5.6', {}, false, p, NOW)).toMatchObject({
       allowed: true,
       reason: 'excluded-version',
     });
-    expect(decideVersion('@scope/bar', '4.5.7', {}, p, NOW).allowed).toBe(false);
+    expect(decideVersion('@scope/bar', '4.5.7', {}, false, p, NOW).allowed).toBe(false);
   });
 });
 
@@ -126,6 +138,16 @@ describe('filterPackument', () => {
     expect(result.doc['dist-tags']).toEqual({ latest: '1.0.0' });
   });
 
+  it('blocks malformed (non-object) version manifests instead of crashing', () => {
+    const doc = makePackument('foo', { '1.0.0': daysAgo(100) });
+    (doc.versions as Record<string, unknown>)['2.0.0'] = null;
+    (doc.time as Record<string, string>)['2.0.0'] = daysAgo(100);
+    const result = filterPackument(doc, 'foo', policy(), NOW);
+    if (result.kind !== 'ok') throw new Error('expected ok');
+    expect(Object.keys(result.doc.versions!)).toEqual(['1.0.0']);
+    expect(result.blockedCount).toBe(1);
+  });
+
   it('drops versions with no time entry (fail closed)', () => {
     const doc = makePackument('foo', { '1.0.0': daysAgo(100), '1.5.0': null });
     const result = filterPackument(doc, 'foo', policy(), NOW);
@@ -169,7 +191,7 @@ describe('proxyTarballUrl', () => {
 
 describe('blockedMessage', () => {
   it('reports age in days for too-young versions', () => {
-    const d = decideVersion('foo', '1.2.3', { '1.2.3': daysAgo(2.4) }, policy(), NOW);
+    const d = decideVersion('foo', '1.2.3', { '1.2.3': daysAgo(2.4) }, true, policy(), NOW);
     const msg = blockedMessage('foo', '1.2.3', d, policy());
     expect(msg).toContain('foo@1.2.3 is only 2.4 days old');
     expect(msg).toContain('Minimum package age is 7 days (168h).');

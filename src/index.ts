@@ -15,6 +15,12 @@ async function main(): Promise<void> {
 
   const app = await buildServer(config);
   await app.listen({ port: config.port, host: config.host });
+  if (config.publicUrlIsDefault) {
+    app.log.warn(
+      { publicRegistryUrl: config.publicRegistryUrl },
+      'PUBLIC_REGISTRY_URL is not set; tarball URLs (and therefore client lockfiles) will point at localhost — set it to the externally reachable proxy URL for any real deployment',
+    );
+  }
   app.log.info(
     {
       upstream: config.upstreamRegistry,

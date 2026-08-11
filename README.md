@@ -85,10 +85,10 @@ All configuration is via environment variables, validated at startup:
 | `LOG_LEVEL` | `info` | pino log level |
 | `MIN_AGE_EXCLUDE_PACKAGES` | — | Comma-separated package names that bypass the age policy |
 | `MIN_AGE_EXCLUDE_VERSIONS` | — | Comma-separated exact `name@version` pairs that bypass it (e.g. `foo@1.2.3,@scope/bar@4.5.6`) |
-| `TARBALL_CACHE_DIR` | disabled | Directory for caching allowed tarballs on disk |
+| `TARBALL_CACHE_DIR` | disabled | Directory for caching allowed tarballs on disk. **Unbounded** — entries are never evicted (tarballs are immutable), so mount a dedicated volume and prune externally (e.g. `tmpwatch`/cron) if disk is a concern. Orphaned `.tmp` files are swept at startup. |
 | `UPSTREAM_TIMEOUT_MS` | `10000` | Upstream connect/header timeout |
 | `MAX_METADATA_BYTES` | `64 MiB` | Max decompressed upstream packument size (full packuments for big packages are tens of MB — don't set this low) |
-| `METADATA_CACHE_MAX_BYTES` | `256 MiB` | Byte cap for the in-memory packument cache (LRU eviction) |
+| `METADATA_CACHE_MAX_BYTES` | `256 MiB` | Byte cap for the in-memory packument cache (LRU eviction). Minimum 1024 — `0` is rejected rather than silently meaning "no limit". Parsed packuments are charged at 2x their serialized size to keep real heap near the cap. |
 
 Notes:
 
@@ -154,7 +154,8 @@ different path in `src/server.ts`.
 - Upstream responses are untrusted: size-capped, JSON parsed defensively,
   tarballs streamed, timeouts enforced.
 - Client `Authorization` headers are never forwarded upstream and are redacted
-  in logs. Stack traces are not exposed when `NODE_ENV=production`.
+  in logs. Error details are never exposed to clients unless
+  `NODE_ENV=development` is explicitly set.
 - Graceful shutdown on SIGTERM/SIGINT (10s deadline).
 - No authentication is required of clients today, but all route handlers get
   their dependencies through one `AppContext`, so an auth hook can be added in

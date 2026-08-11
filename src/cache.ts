@@ -23,12 +23,15 @@ export class MemoryCache<T> implements CacheStore<T> {
   private entries = new Map<string, Entry<T>>();
   private totalBytes = 0;
 
-  constructor(private readonly maxBytes: number) {}
+  constructor(
+    private readonly maxBytes: number,
+    private readonly clock: () => number = Date.now,
+  ) {}
 
   async get(key: string): Promise<T | undefined> {
     const entry = this.entries.get(key);
     if (!entry) return undefined;
-    if (entry.expiresAt <= Date.now()) {
+    if (entry.expiresAt <= this.clock()) {
       this.evict(key, entry);
       return undefined;
     }
@@ -42,7 +45,7 @@ export class MemoryCache<T> implements CacheStore<T> {
     if (this.maxBytes > 0 && sizeBytes > this.maxBytes) return; // never fits; don't thrash
     const existing = this.entries.get(key);
     if (existing) this.evict(key, existing);
-    this.entries.set(key, { value, expiresAt: Date.now() + ttlMs, sizeBytes });
+    this.entries.set(key, { value, expiresAt: this.clock() + ttlMs, sizeBytes });
     this.totalBytes += sizeBytes;
     if (this.maxBytes > 0) {
       for (const [k, e] of this.entries) {

@@ -2,7 +2,7 @@ import Fastify, { LogController, type FastifyInstance, type FastifyReply, type F
 
 import { MemoryCache } from './cache.js';
 import type { Config } from './config.js';
-import type { AppContext } from './context.js';
+import type { AppContext, FilteredMetadata } from './context.js';
 import { MetadataService } from './metadata.js';
 import { Metrics } from './metrics.js';
 import { parseRegistryPath } from './paths.js';
@@ -20,13 +20,20 @@ export interface BuildOptions {
 }
 
 export async function buildServer(config: Config, opts: BuildOptions = {}): Promise<FastifyInstance> {
+  const now = opts.now ?? Date.now;
   const metrics = new Metrics();
   const upstream = new UpstreamClient(config);
+  // Both caches share the injectable clock so tests advancing `now` see
+  // policy time and cache expiry move together.
   const metadata = new MetadataService(
     upstream,
-    new MemoryCache(config.metadataCacheMaxBytes),
+    new MemoryCache(config.metadataCacheMaxBytes, now),
     config,
     metrics,
+  );
+  const filteredCache = new MemoryCache<FilteredMetadata>(
+    Math.min(64 * 1024 * 1024, config.metadataCacheMaxBytes),
+    now,
   );
 
   let tarballCache: TarballDiskCache | null = null;
@@ -40,8 +47,9 @@ export async function buildServer(config: Config, opts: BuildOptions = {}): Prom
     metrics,
     upstream,
     metadata,
+    filteredCache,
     tarballCache,
-    now: opts.now ?? Date.now,
+    now,
   };
 
   const app = Fastify({
@@ -70,7 +78,9 @@ export async function buildServer(config: Config, opts: BuildOptions = {}): Prom
 
   app.setErrorHandler((err: Error, req, reply) => {
     req.log.error({ err }, 'unhandled error');
-    const detail = process.env.NODE_ENV === 'production' ? undefined : err.message;
+    // Safe by default: error details only leak when explicitly in development,
+    // not merely because a bare-metal deploy forgot NODE_ENV=production.
+    const detail = process.env.NODE_ENV === 'development' ? err.message : undefined;
     reply.code(500).send({ error: detail ?? 'Internal Server Error' });
   });
 

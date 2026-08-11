@@ -1,3 +1,5 @@
+import { PassThrough, pipeline } from 'node:stream';
+
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import type { AppContext } from '../context.js';
@@ -34,7 +36,10 @@ export async function handleTarball(
     return reply.code(404).send({ error: 'Not Found' });
   }
 
-  const decision = decideVersion(name, version, result.doc.time, ctx.config, ctx.now());
+  const versionExists =
+    result.doc.versions !== undefined &&
+    Object.prototype.hasOwnProperty.call(result.doc.versions, version);
+  const decision = decideVersion(name, version, result.doc.time, versionExists, ctx.config, ctx.now());
   const logFields = {
     package: name,
     version,
@@ -44,20 +49,15 @@ export async function handleTarball(
   };
 
   if (!decision.allowed) {
-    // A version absent from BOTH `versions` and `time` simply doesn't exist;
-    // present-but-untimestamped versions stay a 403 (fail closed).
-    if (decision.reason === 'unknown-publish-time' && !result.doc.versions?.[version]) {
+    // A version not in `versions` simply doesn't exist (including `time`-map
+    // leftovers of unpublished versions and its special created/modified
+    // keys); present-but-untimestamped versions stay a 403 (fail closed).
+    if (decision.reason === 'unknown-version') {
       return reply.code(404).send({ error: 'Not Found' });
     }
     ctx.metrics.inc('tarballs_blocked_total');
     req.log.info({ ...logFields, reason: decision.reason }, 'tarball blocked');
     return reply.code(403).send({ error: blockedMessage(name, version, decision, ctx.config) });
-  }
-
-  // A version can be excluded from the policy yet absent upstream; anything
-  // else missing from `versions` is simply not found.
-  if (decision.reason === 'old-enough' && !result.doc.versions?.[version]) {
-    return reply.code(404).send({ error: 'Not Found' });
   }
 
   ctx.metrics.inc('tarballs_allowed_total');
@@ -109,7 +109,13 @@ export async function handleTarball(
   });
 
   if (ctx.tarballCache) {
+    // Both consumers attach to the source in this same synchronous tick; the
+    // client reads via a PassThrough so a deferred send (e.g. a future async
+    // onSend hook) buffers instead of losing chunks to the cache sink.
+    const clientStream = new PassThrough();
+    pipeline(upstream.body, clientStream, () => {});
     ctx.tarballCache.writeThrough(name, filename, upstream.body);
+    return reply.code(200).send(clientStream);
   }
   return reply.code(200).send(upstream.body);
 }
@@ -123,9 +129,15 @@ async function proxyHead(ctx: AppContext, upstreamPath: string, reply: FastifyRe
     return sendUpstreamError(reply, err);
   }
   upstream.body.resume();
+  // Same status contract as the GET path: upstream trouble is 5xx, never
+  // disguised as "does not exist".
+  if (upstream.statusCode !== 200 && upstream.statusCode !== 404) {
+    ctx.metrics.inc('upstream_errors_total');
+    return reply.code(502).send();
+  }
   for (const h of ['content-type', 'content-length', 'etag', 'last-modified'] as const) {
     const value = upstream.headers[h];
     if (typeof value === 'string') reply.header(h, value);
   }
-  return reply.code(upstream.statusCode === 200 ? 200 : 404).send();
+  return reply.code(upstream.statusCode).send();
 }

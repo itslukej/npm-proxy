@@ -10,7 +10,14 @@ services:
       # into the tarball URLs served in metadata (and thus into lockfiles).
       PUBLIC_REGISTRY_URL: ${PUBLIC_REGISTRY_URL:-https://npm-proxy.example.com}
       MIN_PACKAGE_AGE_DAYS: ${MIN_PACKAGE_AGE_DAYS:-7}
+      # Empty string means "unset" to the app, so every documented tunable is
+      # forwarded — values in .env must never be silently ignored.
+      MIN_PACKAGE_AGE_HOURS: ${MIN_PACKAGE_AGE_HOURS:-}
       METADATA_CACHE_TTL_SECONDS: ${METADATA_CACHE_TTL_SECONDS:-300}
+      NEGATIVE_CACHE_TTL_SECONDS: ${NEGATIVE_CACHE_TTL_SECONDS:-}
+      UPSTREAM_TIMEOUT_MS: ${UPSTREAM_TIMEOUT_MS:-}
+      MAX_METADATA_BYTES: ${MAX_METADATA_BYTES:-}
+      METADATA_CACHE_MAX_BYTES: ${METADATA_CACHE_MAX_BYTES:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       MIN_AGE_EXCLUDE_PACKAGES: ${MIN_AGE_EXCLUDE_PACKAGES:-}
       MIN_AGE_EXCLUDE_VERSIONS: ${MIN_AGE_EXCLUDE_VERSIONS:-}
