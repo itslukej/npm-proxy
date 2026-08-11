@@ -18,7 +18,7 @@ const GET_ALLOWLIST = new Set(['/-/ping']);
 const POST_ALLOWLIST = new Set([
   '/-/npm/v1/security/audits',
   '/-/npm/v1/security/audits/quick',
-  '/-/v1/security/advisories/bulk',
+  '/-/npm/v1/security/advisories/bulk',
 ]);
 
 export function isAllowedMetaPath(method: string, path: string): boolean {

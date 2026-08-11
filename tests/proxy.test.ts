@@ -227,6 +227,19 @@ describe('read-only enforcement and passthrough', () => {
     expect(res.json()).toEqual({ actions: [] });
   });
 
+  it('passes npm 7+ bulk advisory POSTs through to the upstream', async () => {
+    upstream.route('POST /-/npm/v1/security/advisories/bulk', { body: '{}' });
+    app = await buildTestApp(upstream.url);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/-/npm/v1/security/advisories/bulk',
+      payload: '{"x":["1.0.0"]}',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
   it('proxies /-/ping but blocks other meta endpoints that would leak version data', async () => {
     upstream.route('/-/ping', { body: '{}' });
     upstream.route('/-/v1/search', { body: '{"objects":[]}' });
