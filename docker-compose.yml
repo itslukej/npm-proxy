@@ -1,0 +1,23 @@
+services:
+  npm-proxy:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      UPSTREAM_REGISTRY: ${UPSTREAM_REGISTRY:-https://registry.npmjs.org}
+      # Must be the URL npm clients use to reach this proxy — it is baked
+      # into the tarball URLs served in metadata (and thus into lockfiles).
+      PUBLIC_REGISTRY_URL: ${PUBLIC_REGISTRY_URL:-https://npm-proxy.example.com}
+      MIN_PACKAGE_AGE_DAYS: ${MIN_PACKAGE_AGE_DAYS:-7}
+      METADATA_CACHE_TTL_SECONDS: ${METADATA_CACHE_TTL_SECONDS:-300}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      MIN_AGE_EXCLUDE_PACKAGES: ${MIN_AGE_EXCLUDE_PACKAGES:-}
+      MIN_AGE_EXCLUDE_VERSIONS: ${MIN_AGE_EXCLUDE_VERSIONS:-}
+      TARBALL_CACHE_DIR: /cache
+    volumes:
+      - tarball-cache:/cache
+    restart: unless-stopped
+
+volumes:
+  tarball-cache:

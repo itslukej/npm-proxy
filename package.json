@@ -1,0 +1,32 @@
+{
+  "name": "npm-age-proxy",
+  "version": "1.0.0",
+  "description": "Read-only npm registry proxy that hides package versions younger than a configurable minimum age",
+  "type": "module",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "fastify": "^5.2.0",
+    "semver": "^7.7.0",
+    "undici": "^7.3.0",
+    "validate-npm-package-name": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/semver": "^7.5.8",
+    "@types/validate-npm-package-name": "^4.0.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
