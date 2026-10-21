@@ -1,10 +1,10 @@
 # npm-age-proxy
 
 A small, auditable, **read-only** npm registry proxy that hides package versions
-younger than a configurable minimum age (default: **7 days**). It exists for
-legacy npm clients (npm 5/6) that cannot use modern npm's `min-release-age`
-setting, as a mitigation against supply-chain attacks via freshly published
-packages.
+younger than a configurable minimum age (default: **7 days**), as a mitigation
+against supply-chain attacks via freshly published packages. It is for npm
+clients that cannot enforce a minimum release age themselves: legacy npm 5/6
+in particular, and any npm older than 11.10, which added `min-release-age`.
 
 Point npm at the proxy:
 
@@ -76,6 +76,7 @@ All configuration is via environment variables, validated at startup:
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | Listen port |
+| `HOST` | `0.0.0.0` | Listen address |
 | `UPSTREAM_REGISTRY` | `https://registry.npmjs.org` | The only upstream the proxy will ever talk to |
 | `PUBLIC_REGISTRY_URL` | `http://localhost:$PORT` | Public base URL of this proxy; baked into rewritten tarball URLs (and thus lockfiles) — set it to the real external URL |
 | `MIN_PACKAGE_AGE_DAYS` | `7` | Minimum version age in days |
@@ -92,12 +93,12 @@ All configuration is via environment variables, validated at startup:
 
 Notes:
 
-- The raw upstream packument is cached and the policy is applied per request,
-  so versions become visible the moment they age past the threshold — no
-  cache-expiry lag, and exclusion-list changes apply on restart immediately.
-- The in-memory cache sits behind a small async `CacheStore` interface
-  (`src/cache.ts`), so a shared store like Redis can be slotted in later
-  without touching the rest of the code.
+- The raw upstream packument is cached and the policy is applied when
+  serving, so a version's tarball is allowed the moment it ages past the
+  threshold, and the version appears in served metadata within a minute
+  (filtered responses are cached for up to 60 s).
+- Configuration, including the exclusion lists, is read at startup; restart
+  to apply changes.
 
 ## Pointing legacy npm at the proxy
 
@@ -127,17 +128,18 @@ recently and compare `dist-tags.latest` with the upstream's.
 
 | Endpoint | Behaviour |
 |---|---|
-| `GET/HEAD /{pkg}`, `/{@scope/pkg}` (also `%2f`-encoded) | Filtered packument |
+| `GET /` | Proxy info: upstream registry and minimum age in hours |
+| `GET/HEAD /{pkg}`, `/{@scope/pkg}` (also `%2f`-encoded) | Filtered packument; 404 with an explanation if no version passes the age policy |
 | `GET/HEAD /{pkg}/-/{file}.tgz` | Age-checked tarball (403 if too young) |
 | `GET /health` | 200 when the service is up |
 | `GET /metrics` | Prometheus counters (requests, cache hits/misses, blocked versions/tarballs, upstream errors) |
 | `GET /-/ping`, npm audit `POST`s | Proxied to upstream |
-| everything else | 404 — endpoints like `/-/v1/search` would leak unfiltered version data, so passthrough is default-closed |
-| `PUT`/`DELETE`/other `POST` | 405 — the proxy is strictly read-only; publishing is not supported |
+| Other `/-/…` endpoints | 404 — `npm search` (`/-/v1/search`) and friends would leak unfiltered version data, so passthrough is default-closed |
+| `PUT`/`PATCH`/`DELETE`/`OPTIONS`/other `POST` | 405 — the proxy is strictly read-only; publishing is not supported |
 
 `/health` and `/metrics` shadow the (real) npm packages of the same names; if
 you need to install those through the proxy, move the endpoints behind a
-different path in `src/server.ts`.
+different path in `src/paths.ts`.
 
 ## Security properties
 
@@ -157,9 +159,9 @@ different path in `src/server.ts`.
   in logs. Error details are never exposed to clients unless
   `NODE_ENV=development` is explicitly set.
 - Graceful shutdown on SIGTERM/SIGINT (10s deadline).
-- No authentication is required of clients today, but all route handlers get
-  their dependencies through one `AppContext`, so an auth hook can be added in
-  `src/server.ts` without restructuring.
+- **No client authentication.** Anyone who can reach the proxy can install
+  through it and read `/metrics`; restrict it at the network level, or put an
+  authenticating reverse proxy in front, if that matters.
 
 ## Limitations — read this
 
@@ -183,6 +185,12 @@ Also note: the age policy uses the upstream's `time` map. If an attacker
 compromises the upstream registry itself, the proxy's guarantees are limited
 to what that metadata claims.
 
+Upstream authentication is not supported: client credentials are never
+forwarded and the proxy has none of its own, so packages that need a token
+(e.g. private packages on npmjs.com) can't be fetched through it. Route those
+scopes directly (`@corp:registry=…` in `.npmrc`); as noted above, that also
+takes them out of the age policy.
+
 ## npm compatibility
 
 Tested against the behaviours of npm 5/6: full-JSON packuments are served for
@@ -191,4 +199,9 @@ headers (old clients consume the full document fine); `dist-tags.latest`
 always exists when any version is allowed; npm 6's automatic audit POSTs are
 proxied so installs stay quiet; ETag revalidation is supported on the
 filtered metadata (`If-None-Match` → 304) with short `Cache-Control` so
-clients notice versions aging in.
+clients notice versions aging in. Newer npm's audit endpoint
+(`/-/npm/v1/security/advisories/bulk`) is proxied too.
+
+## License
+
+[MIT](LICENSE)
